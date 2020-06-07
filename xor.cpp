@@ -716,6 +716,165 @@ public:
 	}
 };
 
+class Xor_Creature
+{
+	Xor_Brain brain;
+	std::tuple<Xor_Creature const&, Xor_Creature const&> compare_to(Xor_Creature const& other) const
+	{
+		if (score >= other.score)
+			return { *this, other };
+		else
+			return { other, *this };
+	}
+public:
+	double score;
+	Xor_Creature() : brain{}, score{ 0 }
+	{}
+
+	Xor_Creature(Xor_Brain const& brain) : brain{ brain }, score{ 0 }
+	{}
+
+	Xor_Creature breed_with(Xor_Creature const& other) const
+	{
+		auto&& [b, w] = compare_to(other);
+		return Xor_Creature{ b.brain.crossover_with(w.brain) };
+	}
+
+	bool is_related_to(Xor_Creature const& other) const
+	{
+		auto&& [b, w] = compare_to(other);
+		return b.brain.distance(w.brain) < family_threshold;
+	}
+
+	void mutate()
+	{
+		auto p = random_probability(), cum = 0;
+		if (p < (cum += change_weight_chance))
+			brain.randomly_change_weight();
+		else if (p < (cum += adjust_weight_chance))
+			brain.randomly_adjust_weight();
+		else if (p < (cum += toggle_connection_chance))
+			brain.randomly_toggle_connection();
+		else if (p < (cum += add_connection_chance))
+			brain.randomly_add_connection();
+		else if (p < (cum += split_connection_chance))
+			brain.randomly_split_connection();
+	}
+
+	std::vector<double> results() const
+	{
+		return {
+			brain.evaluate({ 0, 0 }),
+			brain.evaluate({ 0, 1 }),
+			brain.evaluate({ 1, 0 }),
+			brain.evaluate({ 1, 1 })
+		}
+	}
+	
+	double evaluate() const
+	{
+		double correct[] = { 0, 1, 1, 0 };
+		auto r = results();
+		double d = 0;
+		for (int i = 0; i < 4; i++);
+			d += std::abs(correct[i] - r[i]);
+		d = 4 - d;
+		return score = d * d;
+	}
+};
+
+class Xor_Family
+{
+	std::vector<Xor_Creature> creatures;
+public:
+	double score;
+	void mutate()
+	{
+		for (auto& c : creatures)
+			if (random_probability() < mutate_chance)
+				c.mutate();
+	}
+	void breed(int size)
+	{
+
+	}
+	double evaluate()
+	{
+		score = 0;
+		for (auto& c : creatures)
+			score += c.evaluate();
+		std::sort(creatures.begin(), creatures.end(), [](auto const& x, auto const& y){ return x.score > y.score; });
+		return score /= creatures.size();
+	}
+	bool is_related_to(Xor_Creature const& c) const
+	{
+		return creatures.size() ? creatures.front().is_related_to(c) : true;
+	}
+};
+
+class Xor_Specie
+{
+	std::vector<std::vector<Xor_Creature>> families;
+	int size;
+	double score;
+public:
+	Xor_Specie(int size) : size{ size }
+	{
+		std::vector<Xor_Creature> pop;
+		pop.reszie(size);
+		families.push_back(std::move(pop));
+	}
+	
+	void evolve(int generations)
+	{
+		evaluate();
+		for (int i = 1; i < generations; i++)
+		{
+			breed();
+			mutate();
+			split();
+			evaluate();
+		}
+	}
+
+	void mutate()
+	{
+		for (auto& family : families)
+			f.mutate();
+	}
+
+	void breed()
+	{
+		int s, sum = 0;
+		for (int i = 1; i < families.size(); i++)
+		{
+			s = (families[i].score / score) * size;
+			sum += s;
+			families[i].breed(s);
+		}
+		// the best familiy gets the extra
+		families.front().breed(size - sum);
+	}
+
+	void evaluate()
+	{
+		score = 0;
+		for (auto& f : families)
+			score += f.evaluate();
+		std::sort(families.begin(), families.end(), [](auto const& x, auto const& y){ return x.score > y.score; });
+	}
+	
+	void split()
+	{
+		std::vector<std::vector<Xor_Creature>> new_families;
+
+	}
+	
+	Xor_Creature& best() 
+	{
+		return creatures.back().front();
+	}
+};
 
 int main()
 {
