@@ -12,10 +12,24 @@
 
 std::random_device rd;
 std::mt19937 gen(rd()); 
-std::uniform_int_distribution<> distrib(1, 6);
 
+// nerual network config
 double c[3] = { 0.5, 0.5, 0.3 };
-double DELTA = 0.1;
+double weight_delta = 0.01;
+
+// family config
+int survivors = 1;
+int elitism = 3;
+double family_threshold = 3.0;
+
+// mutation config
+double mutate_chance = 0.7;
+double change_weight_chance = 0.20;
+double adjust_weight_chance = 0.65;
+double add_connection_chance = 0.07;
+double split_connection_chance = 0.03;
+double toggle_connection_chance = 0.05;
+
 
 template <typename Iter>
 auto& random_element(Iter begin, Iter end)
@@ -221,7 +235,7 @@ public:
 
 namespace Graphic
 {
-	template <typename>
+	template <auto, typename>
 	class Network;
 }
 
@@ -249,7 +263,7 @@ class Network
 		excess = 2,
 	};
 
-	void detail_gene_types(Type const& other, auto&& found)
+	void detail_gene_types(Type const& other, auto&& found) const
 	{
 		auto my_iter = genes.begin();
 		auto other_iter = other.genes.begin();
@@ -282,7 +296,7 @@ class Network
 			found(Gene_Type::excess, 1, *other_iter);
 	}
 
-	std::tuple<int, int, double> distance_gene_types(Type const& other)
+	std::tuple<int, int, double> distance_gene_types(Type const& other) const
 	{
 		std::tuple<double, int, int> r;
 		int m = 0;
@@ -310,7 +324,7 @@ class Network
 		return r;
 	}
 
-	std::array<Gene_Types<std::vector<Connection>>, 2> gene_types(Type const& other)
+	std::array<Gene_Types<std::vector<Connection>>, 2> gene_types(Type const& other) const
 	{
 		std::array<Gene_Types<std::vector<Connection>>, 2> r;
 		detail_gene_types(other, [&](Gene_Type type, int parent, Connection const& c)
@@ -325,7 +339,11 @@ class Network
 		{
 			double r = 0;
 			for (auto in : nodes[out].connections)
-				r += genes[Connection::id_for(in, out)].weight * (*this)(in, dic);
+			{
+				long id = Connection::id_for(in, out);
+				if (genes[id].enabled)
+					r += genes[id].weight * (*this)(in, dic);
+			}
 			dic[out] = activation(r);
 		}
 		return dic[out];
@@ -373,12 +391,13 @@ public:
 		for (int i = 0; i < inputs.size(); i++)
 			d[inputs[i]] = input[i];
 		std::vector<double> r(outputs.size());
+		int c = 0;
 		for (auto o : outputs)
-			r.push_back((*this)(o, d));
+			r[c++] = (*this)(o, d);
 		return r;
 	}
 
-	Type crossover_with(Type const& other)
+	Type crossover_with(Type const& other) const
 	{
 		auto kid = Type{};
 		auto classified_genes = gene_types(other);
@@ -397,7 +416,7 @@ public:
 		return kid;
 	}
 
-	double distance_from(Type const& other)
+	double distance_from(Type const& other) const
 	{
 		auto [w, d, e] = distance_gene_types(other);
 		auto max = std::max(genes.size(), other.genes.size());
@@ -417,6 +436,11 @@ public:
 			genes.insert(g1);
 			genes.insert(g2);
 		}
+	}
+
+	void connect(int in, int out)
+	{
+		genes.insert(Connection{ nodes[in], nodes[out], random_number(), true });
 	}
 
 	void randomly_add_connection()
@@ -440,7 +464,7 @@ public:
 	void randomly_adjust_weight()
 	{
 		auto& g = random_element(genes);
-		g.weight += random_number(-DELTA, DELTA);
+		g.weight += random_number(-weight_delta, weight_delta);
 		g.weight = std::clamp(g.weight, -1.0, 1.0);
 	}
 
@@ -464,7 +488,8 @@ public:
 			std::cout << node.id << " (" << node.x << ", " << node.y << ")" << std::endl;
 	}
 
-	friend class Graphic::Network<Type>;
+	template <auto action, typename T>
+	friend class Graphic::Network;
 };
 
 #include <SDL2/SDL.h>
@@ -671,19 +696,20 @@ namespace Graphic
 		}
 	};
 
-	template <typename T>
+	template <auto action, typename T>
 	class Network : public Drawable
 	{
-		T& n;
+		T& t;
 		int x, y, w, h;
 		SDL_Color background, node, enabled_connection, disabled_connection, text;
 	public:
 		Network(int x, int y, int w, int h, SDL_Color background, SDL_Color node, SDL_Color enabled_connection, SDL_Color disabled_connection, SDL_Color text, T& n) :
-			n{ n }, x{ x }, y{ y }, w{ w }, h{ h }, background{ background }, node{ node }, enabled_connection{ enabled_connection }, disabled_connection{ disabled_connection }, text{ text }
+			t{ n }, x{ x }, y{ y }, w{ w }, h{ h }, background{ background }, node{ node }, enabled_connection{ enabled_connection }, disabled_connection{ disabled_connection }, text{ text }
 		{}
 
 		void draw(SDL::Renderer& r) final
 		{
+			auto& n = action(t);
 			r.draw_rectangle(x, y, w, h, background);
 			for (auto const& gene : n.genes)
 			{
@@ -711,14 +737,14 @@ public:
 	Xor_Brain()
 	{
 		add_input(Node{ 100, 100, 0 });
-		add_input(Node{ 100, 300, 1 });
-		add_output(Node{ 1500, 200, 2 });
+		add_input(Node{ 100, 200, 1 });
+		add_input(Node{ 100, 300, 2 });
+		add_output(Node{ 1500, 200, 3 });
 	}
 };
 
 class Xor_Creature
 {
-	Xor_Brain brain;
 	std::tuple<Xor_Creature const&, Xor_Creature const&> compare_to(Xor_Creature const& other) const
 	{
 		if (score >= other.score)
@@ -727,9 +753,14 @@ class Xor_Creature
 			return { other, *this };
 	}
 public:
+	Xor_Brain brain;
 	double score;
 	Xor_Creature() : brain{}, score{ 0 }
-	{}
+	{
+		brain.connect(0, 3);
+		brain.connect(1, 3);
+		brain.connect(2, 3);
+	}
 
 	Xor_Creature(Xor_Brain const& brain) : brain{ brain }, score{ 0 }
 	{}
@@ -743,12 +774,12 @@ public:
 	bool is_related_to(Xor_Creature const& other) const
 	{
 		auto&& [b, w] = compare_to(other);
-		return b.brain.distance(w.brain) < family_threshold;
+		return b.brain.distance_from(w.brain) < family_threshold;
 	}
 
 	void mutate()
 	{
-		auto p = random_probability(), cum = 0;
+		auto p = random_probability(), cum = 0.0;
 		if (p < (cum += change_weight_chance))
 			brain.randomly_change_weight();
 		else if (p < (cum += adjust_weight_chance))
@@ -761,33 +792,72 @@ public:
 			brain.randomly_split_connection();
 	}
 
-	std::vector<double> results() const
+	std::array<std::vector<double>, 4> results() const
 	{
 		return {
-			brain.evaluate({ 0, 0 }),
-			brain.evaluate({ 0, 1 }),
-			brain.evaluate({ 1, 0 }),
-			brain.evaluate({ 1, 1 })
-		}
+			brain({ 0, 0, 1 }),
+			brain({ 0, 1, 1 }),
+			brain({ 1, 0, 1 }),
+			brain({ 1, 1, 1 })
+		};
 	}
 	
-	double evaluate() const
+	double evaluate() 
 	{
 		double correct[] = { 0, 1, 1, 0 };
 		auto r = results();
 		double d = 0;
-		for (int i = 0; i < 4; i++);
-			d += std::abs(correct[i] - r[i]);
+		for (int i = 0; i < 4; i++)
+			d += std::abs(correct[i] - r[i][0]);
 		d = 4 - d;
 		return score = d * d;
 	}
+
+	void print_results()
+	{
+		char const* pre[] = { "0,0", "0,1", "1,0", "1,1" };
+		auto results = this->results();
+		for (int i = 0; i < 4; i++)
+			std::cout << pre[i] << ": " << results[i][0] << std::endl;
+	}
+
+	void print_score()
+	{
+		std::cout << score << std::endl;
+	}
 };
+
+
+template <typename T>
+std::tuple<T&, T&> random_weighted_pair(std::vector<T>& c, std::discrete_distribution<>& dis)
+{
+	if (c.size() == 1)
+		return std::tuple<T&, T&>{ c.front(), c.front() };
+	int p = dis(gen), q = dis(gen);
+	if (p == q)
+		if (q != 0)
+			q--;
+		else
+			q++;
+	return std::tuple<T&, T&>{ c[p], c[q] };
+}
 
 class Xor_Family
 {
 	std::vector<Xor_Creature> creatures;
 public:
+	Xor_Family() = default;
+	Xor_Family(int size) : creatures(size)
+	{}
+
 	double score;
+	
+	auto begin() { return creatures.begin(); }
+	auto begin() const { return creatures.begin(); }
+
+	auto end() { return creatures.end(); }
+	auto end() const { return creatures.end(); }
+
 	void mutate()
 	{
 		for (auto& c : creatures)
@@ -796,7 +866,29 @@ public:
 	}
 	void breed(int size)
 	{
+		std::vector<Xor_Creature> next;
 
+		int survivor_amount = survivors > size ? size : survivors;
+		std::copy(creatures.begin(), creatures.begin() + survivor_amount, std::back_inserter(next));
+		size -= survivor_amount;
+
+		
+		int pop_to_kill = creatures.size() / elitism;
+		creatures.erase(creatures.end() - pop_to_kill, creatures.end()); 
+
+		std::vector<double> weights;
+		for (auto& c : creatures)
+			weights.push_back(c.score);
+
+		std::discrete_distribution<> dis{ weights.begin(), weights.end() };
+
+		for (int i = 0; i < size; i++)
+		{	
+			auto&& [p, q] = random_weighted_pair(creatures, dis);	
+			next.push_back(p.breed_with(q));
+		}
+			
+		creatures = std::move(next);
 	}
 	double evaluate()
 	{
@@ -808,22 +900,84 @@ public:
 	}
 	bool is_related_to(Xor_Creature const& c) const
 	{
-		return creatures.size() ? creatures.front().is_related_to(c) : true;
+		return creatures.size() ? head().is_related_to(c) : true;
 	}
+	bool is_related_to(Xor_Family const& f) const
+	{
+		return creatures.size() ? head().is_related_to(f.head()) : true;
+	}
+
+	Xor_Creature const& head() const
+	{
+		return creatures.front();
+	}
+
+	Xor_Creature& head()
+	{
+		return creatures.front();
+	}
+
+	void add(Xor_Family const& f)
+	{
+		for (auto& c : f)
+			creatures.push_back(c);
+	}
+
+	void add(Xor_Creature const& c)
+	{
+		creatures.push_back(c);
+	}
+
+	std::vector<Xor_Creature> expell_misfits()
+	{
+		std::vector<Xor_Creature> misfits;
+		creatures.erase(std::remove_if(creatures.begin(), creatures.end(), [&](auto& c)
+		{ 
+			bool r = !is_related_to(c);
+			if (r)
+				misfits.push_back(c);
+			return r;
+		}), creatures.end());
+		return misfits;
+	}
+
+	void print_results()
+	{
+		for (auto& c : creatures)
+			c.print_results();
+	}
+
+	void print_scores()
+	{
+		std::cout << "family score: " << score << std::endl;
+		for (auto& c : creatures)
+			c.print_score();
+	}
+
+	Xor_Creature& operator[](int index)
+	{
+		return creatures[index];
+	}
+
+	int size() const { return creatures.size(); }
 };
 
 class Xor_Specie
 {
-	std::vector<std::vector<Xor_Creature>> families;
+	std::vector<Xor_Family> families;
 	int size;
 	double score;
+	Xor_Specie() = default;
 public:
-	Xor_Specie(int size) : size{ size }
+	Xor_Specie(int size) : families{ { Xor_Family{ size } } }, size{ size }
 	{
-		std::vector<Xor_Creature> pop;
-		pop.reszie(size);
-		families.push_back(std::move(pop));
 	}
+
+	auto begin() { return families.begin(); }
+	auto begin() const { return families.begin(); }
+
+	auto end() { return families.end(); }
+	auto end() const { return families.end(); }
 	
 	void evolve(int generations)
 	{
@@ -839,7 +993,7 @@ public:
 
 	void mutate()
 	{
-		for (auto& family : families)
+		for (auto& f : families)
 			f.mutate();
 	}
 
@@ -866,29 +1020,88 @@ public:
 	
 	void split()
 	{
-		std::vector<std::vector<Xor_Creature>> new_families;
+		Xor_Specie misfits;
+		for (auto& f : families)
+			for (auto&& c : f.expell_misfits())
+				misfits.add(c);
+		for (auto& m : misfits)
+		{
+			for (auto& f : families)
+				if (f.is_related_to(m.head()))
+				{
+					f.add(m);
+					goto found_family;
+				}
+			families.push_back(m);
+found_family:;
+		}
+	}
 
+	void add(Xor_Family const& f)
+	{
+		families.push_back(f);
+	}
+
+	void add(Xor_Creature const& c)
+	{
+		for (auto& f : families)
+			if (f.is_related_to(c))
+			{
+				f.add(c);
+				break;
+			}
 	}
 	
 	Xor_Creature& best() 
 	{
-		return creatures.back().front();
+		return families.front().head();
+	}
+
+	void print_results()
+	{
+		std::cout << "\033[2J\033[H" << std::endl;
+		for (auto& f : families)
+			f.print_results();
+	}
+
+	void print_scores()
+	{
+		std::cout << "\033[2J\033[H" << std::endl;
+		for (auto& f : families)
+			f.print_scores();
+	}
+
+	Xor_Creature& operator[](int index)
+	{
+		for (auto& f : families)
+			if (index < f.size())
+				return f[index];
+			else
+				index -= f.size();
+		return best();
+	}
+
+	int _size() const
+	{
+		int s = 0;
+		for (auto& f : families)
+			s += f.size();
+		return s;
 	}
 };
 
-int main()
+SDL_Color black	{ 0,   0,   0, 	 255 };
+SDL_Color red	{ 255, 0, 	0, 	 255 };
+SDL_Color green	{ 0,   255, 0, 	 255 };
+SDL_Color blue	{ 0,   0, 	255, 255 };
+SDL_Color white	{ 255, 255,	255, 255 };
+SDL_Color yellow{ 255, 255, 0,   255 }; 
+
+int test_mutations()
 {
 	Xor_Brain brain[3];
 
-	Graphic::Window w{"test mutations", "font.ttf"};
-	
-	SDL_Color black	{ 0,   0,   0, 	 255 };
-	SDL_Color red	{ 255, 0, 	0, 	 255 };
-	SDL_Color green	{ 0,   255, 0, 	 255 };
-	SDL_Color blue	{ 0,   0, 	255, 255 };
-	SDL_Color white	{ 255, 255,	255, 255 };
-	SDL_Color yellow{ 255, 255, 0,   255 }; 
-
+	Graphic::Window w{ "mutations test", "font.ttf" };
 
 	// parent 1 controls
 	w.add_control(Graphic::Button<[](auto& b){ b.randomly_change_weight(); }, Xor_Brain>	{ "change weight mutation", 	0, 0,   400, 200, red, white, brain[0] });
@@ -896,8 +1109,6 @@ int main()
 	w.add_control(Graphic::Button<[](auto& b){ b.randomly_add_connection(); }, Xor_Brain>	{ "add connection mutation", 	0, 400, 400, 200, red, white, brain[0] });
 	w.add_control(Graphic::Button<[](auto& b){ b.randomly_split_connection(); }, Xor_Brain>	{ "split connection mutation", 	0, 600, 400, 200, red, white, brain[0] });
 	w.add_control(Graphic::Button<[](auto& b){ b.randomly_toggle_connection(); }, Xor_Brain>{ "toggle connection mutation", 0, 800, 400, 200, red, white, brain[0] });
-	w.add_control(Graphic::Button<[](auto& b){ b.print_genes(); }, Xor_Brain>				{ "print genes", 				0, 1000, 400, 200, red, white, brain[0] });
-	w.add_control(Graphic::Button<[](auto& b){ b.print_nodes(); }, Xor_Brain>				{ "print nodes", 				0, 1200, 400, 200, red, white, brain[0] });
 	
 	// parent 2 controls
 	w.add_control(Graphic::Button<[](auto& b){ b.randomly_change_weight(); }, Xor_Brain>	{ "change weight mutation", 	400, 0,    400, 200, green, white, brain[1] });
@@ -905,17 +1116,60 @@ int main()
 	w.add_control(Graphic::Button<[](auto& b){ b.randomly_add_connection(); }, Xor_Brain>	{ "add connection mutation", 	400, 400,  400, 200, green, white, brain[1] });
 	w.add_control(Graphic::Button<[](auto& b){ b.randomly_split_connection(); }, Xor_Brain>	{ "split connection mutation", 	400, 600,  400, 200, green, white, brain[1] });
 	w.add_control(Graphic::Button<[](auto& b){ b.randomly_toggle_connection(); }, Xor_Brain>{ "toggle connection mutation", 400, 800,  400, 200, green, white, brain[1] });
-	w.add_control(Graphic::Button<[](auto& b){ b.print_genes(); }, Xor_Brain>				{ "print genes", 				400, 1000, 400, 200, green, white, brain[1] });
-	w.add_control(Graphic::Button<[](auto& b){ b.print_nodes(); }, Xor_Brain>				{ "print nodes", 				400, 1200, 400, 200, green, white, brain[1] });
+
+	// debug controls
+	w.add_control(Graphic::Button<[](auto& b){ b.print_genes(); }, Xor_Brain>{ "print genes", 0, 1000, 400, 200, red, white, brain[0] });
+	w.add_control(Graphic::Button<[](auto& b){ b.print_nodes(); }, Xor_Brain>{ "print nodes", 0, 1200, 400, 200, red, white, brain[0] });
+	
+	w.add_control(Graphic::Button<[](auto& b){ b.print_genes(); }, Xor_Brain>{ "print genes", 400, 1000, 400, 200, green, white, brain[1] });
+	w.add_control(Graphic::Button<[](auto& b){ b.print_nodes(); }, Xor_Brain>{ "print nodes", 400, 1200, 400, 200, green, white, brain[1] });
 
 	// kid controls
 	w.add_control(Graphic::Button<[](auto& p, auto& q, auto& k){ k = p.crossover_with(q); }, Xor_Brain, Xor_Brain, Xor_Brain>{ "crossover", 800, 0, 400, 200, blue, white, brain[0], brain[1], brain[2] });
 	
 	// brains
-	w.add_control(Graphic::Network<Xor_Brain>{ 1200, 0,    1600, 600, red,   yellow, green, red, white, brain[0] });
-	w.add_control(Graphic::Network<Xor_Brain>{ 1200, 600,  1600, 600, green, yellow, green, red, white, brain[1] });
-	w.add_control(Graphic::Network<Xor_Brain>{ 1200, 1200, 1600, 600, blue,  yellow, green, red, white, brain[2] });
-	
+	w.add_control(Graphic::Network<[](auto& b) -> auto& { return b; }, Xor_Brain>{ 1200, 0,    1600, 600, red,   yellow, green, red, white, brain[0] });
+	w.add_control(Graphic::Network<[](auto& b) -> auto& { return b; }, Xor_Brain>{ 1200, 600,  1600, 600, green, yellow, green, red, white, brain[1] });
+	w.add_control(Graphic::Network<[](auto& b) -> auto& { return b; }, Xor_Brain>{ 1200, 1200, 1600, 600, blue,  yellow, green, red, white, brain[2] });
+
 	return w.run();
 }
 
+int test_neat()
+{
+	Xor_Specie xors{ 150 };
+	
+	Graphic::Window w{ "neat test", "font.ttf" };
+
+	// evolution controls
+	w.add_control(Graphic::Button<[](auto& x){ x.evaluate(); }, Xor_Specie>         { "evaluate", 0, 0,   400, 200, red, white, xors });
+	w.add_control(Graphic::Button<[](auto& x){ x.split(); x.breed(); }, Xor_Specie>{ "breed", 	 0, 200, 400, 200, red, white, xors });
+	w.add_control(Graphic::Button<[](auto& x){ x.mutate(); }, Xor_Specie>          { "mutate",	 0, 400, 400, 200, red, white, xors });
+	w.add_control(Graphic::Button<[](auto& x)
+	{ 
+		x.evaluate();
+		for (int i = 0; i < 100; i++)
+		{
+			x.split();
+			x.breed();
+			x.mutate(); 
+			x.evaluate();
+		}
+	}, Xor_Specie>          { "evolve for 100 generations",	 0, 600, 400, 200, red, white, xors });
+	
+	// debug controls
+	w.add_control(Graphic::Button<[](auto& x){ x.print_results(); }, Xor_Specie>{ "print results", 0, 800, 400, 200, red, white, xors });
+	w.add_control(Graphic::Button<[](auto& x){ x.print_scores(); }, Xor_Specie>{ "print scores", 0, 1000, 400, 200, red, white, xors });
+
+	// brains
+	w.add_control(Graphic::Network<[](auto& x) -> auto& { return x[0].brain; }, Xor_Specie>  { 400, 0,   1600, 600, green, yellow, green, red, white, xors });
+	w.add_control(Graphic::Network<[](auto& x) -> auto& { return x[1].brain; }, Xor_Specie>{ 400, 600, 1600, 600, blue,  yellow, green, red, white, xors });
+
+	return w.run();
+}
+
+int main()
+{
+//	return test_mutations();
+	return test_neat();
+}	
